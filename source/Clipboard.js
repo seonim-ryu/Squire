@@ -3,26 +3,35 @@
 // The (non-standard but supported enough) innerText property is based on the
 // render tree in Firefox and possibly other browsers, so we must insert the
 // DOM node into the document to ensure the text part is correct.
-var setClipboardData = function ( clipboardData, node, root, config ) {
-    var body = node.ownerDocument.body;
-    var willCutCopy = config.willCutCopy;
+var setClipboardData =
+        function ( event, contents, root, willCutCopy, toPlainText, plainTextOnly ) {
+    var clipboardData = event.clipboardData;
+    var doc = event.target.ownerDocument;
+    var body = doc.body;
+    var node = createElement( doc, 'div' );
     var html, text;
 
-    // Firefox will add an extra new line for BRs at the end of block when
-    // calculating innerText, even though they don't actually affect display.
-    // So we need to remove them first.
-    cleanupBRs( node, root, true );
+    node.appendChild( contents );
 
-    node.setAttribute( 'style',
-        'position:fixed;overflow:hidden;bottom:100%;right:100%;' );
-    body.appendChild( node );
     html = node.innerHTML;
-    text = node.innerText || node.textContent;
-
     if ( willCutCopy ) {
         html = willCutCopy( html );
     }
 
+    if ( toPlainText ) {
+        text = toPlainText( html );
+    } else {
+        // Firefox will add an extra new line for BRs at the end of block when
+        // calculating innerText, even though they don't actually affect
+        // display, so we need to remove them first.
+        cleanupBRs( node, root, true );
+        node.setAttribute( 'style',
+            'position:fixed;overflow:hidden;bottom:100%;right:100%;' );
+        body.appendChild( node );
+        text = node.innerText || node.textContent;
+        text = text.replace( / /g, ' ' ); // Replace nbsp with regular space
+        body.removeChild( node );
+    }
     // Firefox (and others?) returns unix line endings (\n) even on Windows.
     // If on Windows, normalise to \r\n, since Notepad and some other crappy
     // apps do not understand just \n.
@@ -30,18 +39,18 @@ var setClipboardData = function ( clipboardData, node, root, config ) {
         text = text.replace( /\r?\n/g, '\r\n' );
     }
 
-    clipboardData.setData( 'text/html', html );
+    if ( !plainTextOnly && text !== html ) {
+        clipboardData.setData( 'text/html', html );
+    }
     clipboardData.setData( 'text/plain', text );
-
-    body.removeChild( node );
+    event.preventDefault();
 };
 
 var onCut = function ( event ) {
-    var clipboardData = event.clipboardData;
     var range = this.getSelection();
     var root = this._root;
     var self = this;
-    var startBlock, endBlock, copyRoot, contents, parent, newContents, node;
+    var startBlock, endBlock, copyRoot, contents, parent, newContents;
 
     // Nothing to do
     if ( range.collapsed ) {
@@ -53,9 +62,7 @@ var onCut = function ( event ) {
     this.saveUndoState( range );
 
     // Edge only seems to support setting plain text as of 2016-03-11.
-    // Mobile Safari flat out doesn't work:
-    // https://bugs.webkit.org/show_bug.cgi?id=143776
-    if ( !isEdge && !isIOS && clipboardData ) {
+    if ( !isEdge && event.clipboardData ) {
         // Clipboard content should include all parents within block, or all
         // parents up to root if selection across blocks
         startBlock = getStartBlockOfRange( range, root );
@@ -75,10 +82,8 @@ var onCut = function ( event ) {
             parent = parent.parentNode;
         }
         // Set clipboard data
-        node = this.createElement( 'div' );
-        node.appendChild( contents );
-        setClipboardData( clipboardData, node, root, this._config );
-        event.preventDefault();
+        setClipboardData(
+            event, contents, root, this._config.willCutCopy, null, false );
     } else {
         setTimeout( function () {
             try {
@@ -93,16 +98,10 @@ var onCut = function ( event ) {
     this.setSelection( range );
 };
 
-var onCopy = function ( event ) {
-    var clipboardData = event.clipboardData;
-    var range = this.getSelection();
-    var root = this._root;
-    var startBlock, endBlock, copyRoot, contents, parent, newContents, node;
-
+var _onCopy = function ( event, range, root, willCutCopy, toPlainText, plainTextOnly ) {
+    var startBlock, endBlock, copyRoot, contents, parent, newContents;
     // Edge only seems to support setting plain text as of 2016-03-11.
-    // Mobile Safari flat out doesn't work:
-    // https://bugs.webkit.org/show_bug.cgi?id=143776
-    if ( !isEdge && !isIOS && clipboardData ) {
+    if ( !isEdge && event.clipboardData ) {
         // Clipboard content should include all parents within block, or all
         // parents up to root if selection across blocks
         startBlock = getStartBlockOfRange( range, root );
@@ -127,11 +126,19 @@ var onCopy = function ( event ) {
             parent = parent.parentNode;
         }
         // Set clipboard data
-        node = this.createElement( 'div' );
-        node.appendChild( contents );
-        setClipboardData( clipboardData, node, root, this._config );
-        event.preventDefault();
+        setClipboardData( event, contents, root, willCutCopy, toPlainText, plainTextOnly );
     }
+};
+
+var onCopy = function ( event ) {
+    _onCopy(
+        event,
+        this.getSelection(),
+        this._root,
+        this._config.willCutCopy,
+        null,
+        false
+    );
 };
 
 // Need to monitor for shift key like this, as event.shiftKey is not available
@@ -162,7 +169,10 @@ var onPaste = function ( event ) {
             type = item.type;
             if ( type === 'text/html' ) {
                 htmlItem = item;
-            } else if ( type === 'text/plain' ) {
+            // iOS copy URL gives you type text/uri-list which is just a list
+            // of 1 or more URLs separated by new lines. Can just treat as
+            // plain text.
+            } else if ( type === 'text/plain' || type === 'text/uri-list' ) {
                 plainItem = item;
             } else if ( type === 'text/rtf' ) {
                 hasRTF = true;

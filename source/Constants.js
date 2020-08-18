@@ -20,22 +20,19 @@ var win = doc.defaultView;
 var ua = navigator.userAgent;
 
 var isAndroid = /Android/.test( ua );
-var isIOS = /iP(?:ad|hone|od)/.test( ua );
 var isMac = /Mac OS X/.test( ua );
 var isWin = /Windows NT/.test( ua );
+var isIOS = /iP(?:ad|hone|od)/.test( ua ) ||
+    ( isMac && !!navigator.maxTouchPoints );
 
 var isGecko = /Gecko\//.test( ua );
-var isIElt11 = /Trident\/[456]\./.test( ua );
-var isPresto = !!win.opera;
 var isEdge = /Edge\//.test( ua );
 var isWebKit = !isEdge && /WebKit\//.test( ua );
 var isIE = /Trident\/[4567]\./.test( ua );
 
 var ctrlKey = isMac ? 'meta-' : 'ctrl-';
 
-var useTextFixer = isIElt11 || isPresto;
-var cantFocusEmptyTextNodes = isIElt11 || isWebKit;
-var losesSelectionOnBlur = isIElt11;
+var cantFocusEmptyTextNodes = isWebKit;
 
 var canObserveMutations = typeof MutationObserver !== 'undefined';
 var canWeakMap = typeof WeakMap !== 'undefined';
@@ -44,12 +41,3 @@ var canWeakMap = typeof WeakMap !== 'undefined';
 var notWS = /[^ \t\r\n]/;
 
 var indexOf = Array.prototype.indexOf;
-
-// Polyfill for FF3.5
-if ( !Object.create ) {
-    Object.create = function ( proto ) {
-        var F = function () {};
-        F.prototype = proto;
-        return new F();
-    };
-}

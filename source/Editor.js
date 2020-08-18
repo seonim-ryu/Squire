@@ -35,12 +35,6 @@ function Squire ( root, config ) {
     this._isFocused = false;
     this._lastSelection = null;
 
-    // IE loses selection state of iframe on blur, so make sure we
-    // cache it just before it loses focus.
-    if ( losesSelectionOnBlur ) {
-        this.addEventListener( 'beforedeactivate', this.getSelection );
-    }
-
     this._hasZWS = false;
 
     this._lastAnchorNode = null;
@@ -87,15 +81,13 @@ function Squire ( root, config ) {
     // IE sometimes fires the beforepaste event twice; make sure it is not run
     // again before our after paste function is called.
     this._awaitingPaste = false;
-    this.addEventListener( isIElt11 ? 'beforecut' : 'cut', onCut );
+    this.addEventListener( 'cut', onCut );
     this.addEventListener( 'copy', onCopy );
     this.addEventListener( 'keydown', monitorShiftKey );
     this.addEventListener( 'keyup', monitorShiftKey );
-    this.addEventListener( isIElt11 ? 'beforepaste' : 'paste', onPaste );
+    this.addEventListener( 'paste', onPaste );
     this.addEventListener( 'drop', onDrop );
-
-    // Opera does not fire keydown repeatedly.
-    this.addEventListener( isPresto ? 'keypress' : 'keydown', onKey );
+    this.addEventListener( 'keydown', onKey );
 
     // Add key handlers
     this._keyHandlers = Object.create( keyHandlers );
@@ -103,36 +95,9 @@ function Squire ( root, config ) {
     // Override default properties
     this.setConfig( config );
 
-    // Fix IE<10's buggy implementation of Text#splitText.
-    // If the split is at the end of the node, it doesn't insert the newly split
-    // node into the document, and sets its value to undefined rather than ''.
-    // And even if the split is not at the end, the original node is removed
-    // from the document and replaced by another, rather than just having its
-    // data shortened.
-    // We used to feature test for this, but then found the feature test would
-    // sometimes pass, but later on the buggy behaviour would still appear.
-    // I think IE10 does not have the same bug, but it doesn't hurt to replace
-    // its native fn too and then we don't need yet another UA category.
-    if ( isIElt11 ) {
-        win.Text.prototype.splitText = function ( offset ) {
-            var afterSplit = this.ownerDocument.createTextNode(
-                    this.data.slice( offset ) ),
-                next = this.nextSibling,
-                parent = this.parentNode,
-                toDelete = this.length - offset;
-            if ( next ) {
-                parent.insertBefore( afterSplit, next );
-            } else {
-                parent.appendChild( afterSplit );
-            }
-            if ( toDelete ) {
-                this.deleteData( offset, toDelete );
-            }
-            return afterSplit;
-        };
-    }
-
     root.setAttribute( 'contenteditable', 'true' );
+    // Grammarly breaks the editor, *sigh*
+    root.setAttribute( 'data-gramm', 'false' );
 
     // Remove Firefox's built-in controls
     try {
@@ -187,7 +152,8 @@ proto.setConfig = function ( config ) {
         sanitizeToDOMFragment:
             typeof DOMPurify !== 'undefined' && DOMPurify.isSupported ?
             sanitizeToDOMFragment : null,
-        willCutCopy: null
+        willCutCopy: null,
+        addLinks: true
     }, config, true );
 
     // Users may specify block tag in lower case
@@ -633,7 +599,7 @@ proto._updatePath = function ( range, force ) {
 // selectionchange is fired synchronously in IE when removing current selection
 // and when setting new selection; keyup/mouseup may have processing we want
 // to do first. Either way, send to next event loop.
-proto._updatePathOnEvent = function ( event ) {
+proto._updatePathOnEvent = function () {
     var self = this;
     if ( self._isFocused && !self._willUpdatePath ) {
         self._willUpdatePath = true;
@@ -647,7 +613,7 @@ proto._updatePathOnEvent = function ( event ) {
 // --- Focus ---
 
 proto.focus = function () {
-    this._root.focus();
+    this._root.focus({ preventScroll: true });
 
     if ( isIE ) {
         this.fireEvent( 'focus' );
@@ -1645,29 +1611,11 @@ proto._setHTML = function ( html ) {
 };
 
 proto.getHTML = function ( withBookMark ) {
-    var brs = [],
-        root, node, fixer, html, l, range;
+    var html, range;
     if ( withBookMark && ( range = this.getSelection() ) ) {
         this._saveRangeToBookmark( range );
     }
-    if ( useTextFixer ) {
-        root = this._root;
-        node = root;
-        while ( node = getNextBlock( node, root ) ) {
-            if ( !node.textContent && !node.querySelector( 'BR' ) ) {
-                fixer = this.createElement( 'BR' );
-                node.appendChild( fixer );
-                brs.push( fixer );
-            }
-        }
-    }
     html = this._getHTML().replace( /\u200B/g, '' );
-    if ( useTextFixer ) {
-        l = brs.length;
-        while ( l-- ) {
-            detach( brs[l] );
-        }
-    }
     if ( range ) {
         this._getRangeAndRemoveBookmark( range );
     }
@@ -1788,7 +1736,57 @@ proto.insertImage = function ( src, attributes ) {
     return img;
 };
 
-proto.linkRegExp = /\b((?:(?:ht|f)tps?:\/\/|www\d{0,3}[.]|[a-z0-9.\-]+[.][a-z]{2,}\/)(?:[^\s()<>]+|\([^\s()<>]+\))+(?:\((?:[^\s()<>]+|(?:\([^\s()<>]+\)))*\)|[^\s`!()\[\]{};:'".,<>?«»“”‘’]))|([\w\-.%+]+@(?:[\w\-]+\.)+[A-Z]{2,}\b)(?:\?[^&?\s]+=[^&?\s]+(?:&[^&?\s]+=[^&?\s]+)*)?/i;
+/*
+const linkRegExp = new RegExp(
+// Only look on boundaries
+'\\b(?:' +
+// Capture group 1: URLs
+'(' +
+    // Add links to URLS
+    // Starts with:
+    '(?:' +
+        // http(s):// or ftp://
+        '(?:ht|f)tps?:\\/\\/' +
+        // or
+        '|' +
+        // www.
+        'www\\d{0,3}[.]' +
+        // or
+        '|' +
+        // foo90.com/
+        '[a-z0-9][a-z0-9.\\-]*[.][a-z]{2,}\\/' +
+    ')' +
+    // Then we get one or more:
+    '(?:' +
+        // Run of non-spaces, non ()<>
+        '[^\\s()<>]+' +
+        // or
+        '|' +
+        // balanced parentheses (one level deep only)
+        '\\([^\\s()<>]+\\)' +
+    ')+' +
+    // And we finish with
+    '(?:' +
+        // Not a space or punctuation character
+        '[^\\s?&`!()\\[\\]{};:\'".,<>«»“”‘’]' +
+        // or
+        '|' +
+        // Balanced parentheses.
+        '\\([^\\s()<>]+\\)' +
+    ')' +
+// Capture group 2: Emails
+')|(' +
+    // Add links to emails
+    '[\\w\\-.%+]+@(?:[\\w\\-]+\\.)+[a-z]{2,}\\b' +
+    // Allow query parameters in the mailto: style
+    '(?:' +
+        '[?][^&?\\s]+=[^\\s?&`!()\\[\\]{};:\'".,<>«»“”‘’]+' +
+        '(?:&[^&?\\s]+=[^\\s?&`!()\\[\\]{};:\'".,<>«»“”‘’]+)*' +
+    ')?' +
+'))', 'i' );
+*/
+
+proto.linkRegExp = /\b(?:((?:(?:ht|f)tps?:\/\/|www\d{0,3}[.]|[a-z0-9][a-z0-9.\-]*[.][a-z]{2,}\/)(?:[^\s()<>]+|\([^\s()<>]+\))+(?:[^\s?&`!()\[\]{};:'".,<>«»“”‘’]|\([^\s()<>]+\)))|([\w\-.%+]+@(?:[\w\-]+\.)+[a-z]{2,}\b(?:[?][^&?\s]+=[^\s?&`!()\[\]{};:'".,<>«»“”‘’]+(?:&[^&?\s]+=[^\s?&`!()\[\]{};:'".,<>«»“”‘’]+)*)?))/i;
 
 var addLinks = function ( frag, root, self ) {
     var doc = frag.ownerDocument;
@@ -1899,6 +1897,12 @@ proto.insertHTML = function ( html, isPaste ) {
                 this._docWasChanged();
             }
             range.collapse( false );
+
+            // After inserting the fragment, check whether the cursor is inside
+            // an <a> element and if so if there is an equivalent cursor
+            // position after the <a> element. If there is, move it there.
+            moveRangeBoundaryOutOf( range, 'A', root );
+
             this._ensureBottomLine();
         }
 
@@ -1914,11 +1918,11 @@ proto.insertHTML = function ( html, isPaste ) {
     return this;
 };
 
-var escapeHTMLFragement = function ( text ) {
+var escapeHTML = function ( text ) {
     return text.split( '&' ).join( '&amp;' )
-               .split( '<' ).join( '&lt;'  )
-               .split( '>' ).join( '&gt;'  )
-               .split( '"' ).join( '&quot;'  );
+               .split( '<' ).join( '&lt;' )
+               .split( '>' ).join( '&gt;' )
+               .split( '"' ).join( '&quot;' );
 };
 
 proto.insertPlainText = function ( plainText, isPaste ) {
@@ -1964,16 +1968,21 @@ proto.insertPlainText = function ( plainText, isPaste ) {
 
     for ( attr in attributes ) {
         openBlock += ' ' + attr + '="' +
-            escapeHTMLFragement( attributes[ attr ] ) +
+            escapeHTML( attributes[ attr ] ) +
         '"';
     }
     openBlock += '>';
 
     for ( i = 0, l = lines.length; i < l; i += 1 ) {
         line = lines[i];
-        line = escapeHTMLFragement( line ).replace( / (?= )/g, '&nbsp;' );
+        line = escapeHTML( line ).replace( / (?= )/g, '&nbsp;' );
+        // We don't wrap the first line in the block, so if it gets inserted
+        // into a blank line it keeps that line's formatting.
         // Wrap each line in <div></div>
-        lines[i] = openBlock + ( line || '<BR>' ) + closeBlock;
+        if ( i ) {
+            line = openBlock + ( line || '<BR>' ) + closeBlock;
+        }
+        lines[i] = line;
     }
     return this.insertHTML( lines.join( '' ), isPaste );
 };

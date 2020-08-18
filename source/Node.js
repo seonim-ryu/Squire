@@ -211,7 +211,7 @@ function createElement ( doc, tag, props, children ) {
         for ( attr in props ) {
             value = props[ attr ];
             if ( value !== undefined ) {
-                el.setAttribute( attr, props[ attr ] );
+                el.setAttribute( attr, value );
             }
         }
     }
@@ -225,7 +225,7 @@ function createElement ( doc, tag, props, children ) {
 
 function fixCursor ( node, root ) {
     // In Webkit and Gecko, block level elements are collapsed and
-    // unfocussable if they have no content. To remedy this, a <BR> must be
+    // unfocusable if they have no content. To remedy this, a <BR> must be
     // inserted. In Opera and IE, we just need a textnode in order for the
     // cursor to appear.
     var self = root.__squire__;
@@ -266,31 +266,10 @@ function fixCursor ( node, root ) {
                 fixer = doc.createTextNode( '' );
             }
         }
-    } else {
-        if ( useTextFixer ) {
-            while ( node.nodeType !== TEXT_NODE && !isLeaf( node ) ) {
-                child = node.firstChild;
-                if ( !child ) {
-                    fixer = doc.createTextNode( '' );
-                    break;
-                }
-                node = child;
-            }
-            if ( node.nodeType === TEXT_NODE ) {
-                // Opera will collapse the block element if it contains
-                // just spaces (but not if it contains no data at all).
-                if ( /^ +$/.test( node.data ) ) {
-                    node.data = '';
-                }
-            } else if ( isLeaf( node ) ) {
-                node.parentNode.insertBefore( doc.createTextNode( '' ), node );
-            }
-        }
-        else if ( !node.querySelector( 'BR' ) ) {
-            fixer = createElement( doc, 'BR' );
-            while ( ( child = node.lastElementChild ) && !isInline( child ) ) {
-                node = child;
-            }
+    } else if ( !node.querySelector( 'BR' ) ) {
+        fixer = createElement( doc, 'BR' );
+        while ( ( child = node.lastElementChild ) && !isInline( child ) ) {
+            node = child;
         }
     }
     if ( fixer ) {
@@ -314,23 +293,20 @@ function fixContainer ( container, root ) {
     var doc = container.ownerDocument;
     var wrapper = null;
     var i, l, child, isBR;
-    var config = root.__squire__._config;
 
     for ( i = 0, l = children.length; i < l; i += 1 ) {
         child = children[i];
         isBR = child.nodeName === 'BR';
         if ( !isBR && isInline( child ) ) {
             if ( !wrapper ) {
-                 wrapper = createElement( doc,
-                    config.blockTag, config.blockAttributes );
+                 wrapper = createElement( doc, 'div' );
             }
             wrapper.appendChild( child );
             i -= 1;
             l -= 1;
         } else if ( isBR || wrapper ) {
             if ( !wrapper ) {
-                wrapper = createElement( doc,
-                    config.blockTag, config.blockAttributes );
+                wrapper = createElement( doc, 'div' );
             }
             fixCursor( wrapper, root );
             if ( isBR ) {
@@ -501,18 +477,6 @@ function mergeWithBlock ( block, next, range, root ) {
     range.setStart( block, offset );
     range.collapse( true );
     mergeInlines( block, range );
-
-    // Opera inserts a BR if you delete the last piece of text
-    // in a block-level element. Unfortunately, it then gets
-    // confused when setting the selection subsequently and
-    // refuses to accept the range that finishes just before the
-    // BR. Removing the BR fixes the bug.
-    // Steps to reproduce bug: Type "a-b-c" (where - is return)
-    // then backspace twice. The cursor goes to the top instead
-    // of after "b".
-    if ( isPresto && ( last = block.lastChild ) && last.nodeName === 'BR' ) {
-        block.removeChild( last );
-    }
 }
 
 function mergeContainers ( node, root ) {

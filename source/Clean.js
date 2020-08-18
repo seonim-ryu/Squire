@@ -11,24 +11,6 @@ var fontSizes = {
 };
 
 var styleToSemantic = {
-    backgroundColor: {
-        regexp: notWS,
-        replace: function ( doc, classNames, colour ) {
-            return createElement( doc, 'SPAN', {
-                'class': classNames.highlight,
-                style: 'background-color:' + colour
-            });
-        }
-    },
-    color: {
-        regexp: notWS,
-        replace: function ( doc, classNames, colour ) {
-            return createElement( doc, 'SPAN', {
-                'class': classNames.colour,
-                style: 'color:' + colour
-            });
-        }
-    },
     fontWeight: {
         regexp: /^bold|^700/i,
         replace: function ( doc ) {
@@ -70,6 +52,12 @@ var styleToSemantic = {
 var replaceWithTag = function ( tag ) {
     return function ( node, parent ) {
         var el = createElement( node.ownerDocument, tag );
+        var attributes = node.attributes;
+        var i, l, attribute;
+        for ( i = 0, l = attributes.length; i < l; i += 1 ) {
+            attribute = attributes[i];
+            el.setAttribute( attribute.name, attribute.value );
+        }
         parent.replaceChild( el, node );
         el.appendChild( empty( node ) );
         return el;
@@ -86,6 +74,10 @@ var replaceStyles = function ( node, parent, config ) {
         css = style[ attr ];
         if ( css && converter.regexp.test( css ) ) {
             el = converter.replace( doc, config.classNames, css );
+            if ( el.nodeName === node.nodeName &&
+                    el.className === node.className ) {
+                continue;
+            }
             if ( !newTreeTop ) {
                 newTreeTop = el;
             }
@@ -99,18 +91,13 @@ var replaceStyles = function ( node, parent, config ) {
 
     if ( newTreeTop ) {
         newTreeBottom.appendChild( empty( node ) );
-        if ( node.nodeName === 'SPAN' ) {
-            parent.replaceChild( newTreeTop, node );
-        } else {
-            node.appendChild( newTreeTop );
-        }
+        node.appendChild( newTreeTop );
     }
 
     return newTreeBottom || node;
 };
 
 var stylesRewriters = {
-    P: replaceStyles,
     SPAN: replaceStyles,
     STRONG: replaceWithTag( 'B' ),
     EM: replaceWithTag( 'I' ),
